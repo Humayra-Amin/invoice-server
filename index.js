@@ -1,49 +1,112 @@
 const express = require('express');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
 require('dotenv').config();
+
 const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-    origin: [],
-    credentials:true,
-  }));
-  app.use(express.json());
+    origin: ["http://localhost:5173"],
+    credentials: true,
+}));
+app.use(express.json());
 
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.9jkswbp.mongodb.net/?appName=Cluster0`;
 
-  const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.9jkswbp.mongodb.net/?appName=Cluster0`;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  }
+    serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+    }
 });
 
+let invoicesCollection;
+
 async function run() {
-  try {
-    // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
-    // Ensures that the client will close when you finish/error
-    await client.close();
-  }
+    try {
+        // await client.connect();
+        const database = client.db("invoiceDB");
+        invoicesCollection = database.collection("invoices");
+        console.log("Connected to MongoDB!");
+    } catch (err) {
+        console.error(err);
+    }
 }
 run().catch(console.dir);
 
+app.get('/', (req, res) => {
+    res.send('Invoice Server Started');
+});
 
+app.post('/api/invoices', async (req, res) => {
+    const invoice = req.body;
+    try {
+        const result = await invoicesCollection.insertOne(invoice);
+        res.status(201).json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
-  app.get('/', (req, res) => {
-    res.send('Invoice Server Started')
-  })
-  
-  app.listen(port, () => {
-    console.log(`Server started on http://localhost: ${port}`)
-  })
+app.get('/api/invoices', async (req, res) => {
+    try {
+        const invoices = await invoicesCollection.find({}).toArray();
+        res.status(200).json(invoices);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/invoices/:id', async (req, res) => {
+    const invoiceId = req.params.id;
+    try {
+        const invoice = await invoicesCollection.findOne({ _id: new ObjectId(invoiceId) });
+        if (!invoice) {
+            return res.status(404).json({ error: 'Invoice not found' });
+        }
+        res.status(200).json(invoice);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// API endpoint to generate and download PDF
+app.get('/api/invoices/:id/pdf', async (req, res) => {
+    try {
+        const invoiceId = req.params.id;
+        const invoice = await invoicesCollection.findOne({ _id: new ObjectId(invoiceId) });
+
+        if (!invoice) {
+            return res.status(404).json({ error: 'Invoice not found' });
+        }
+
+        // Create a PDF document
+        const doc = new PDFDocument();
+
+        // Set headers to download the file
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=invoice_${invoice.invoiceDetails.invoiceNo}.pdf`);
+
+        // Stream the PDF to the response
+        doc.pipe(res);
+
+        // Add content to the PDF document
+        doc.fontSize(14).text(`Invoice No: ${invoice.invoiceDetails.invoiceNo}`, 100, 100);
+        doc.text(`Invoice Date: ${invoice.invoiceDetails.invoiceDate}`, 100, 120);
+        // Add more invoice details as needed...
+
+        doc.end();
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to generate PDF' });
+    }
+});
+
+app.listen(port, () => {
+    console.log(`Server started on http://localhost:${port}`);
+});
